@@ -34,7 +34,7 @@ The system is designed to help clients search and segment profile datasets effic
 
 ## Installation 
 
-https://github.com/lordrock/stage3-backend/tree/main/stack3
+https://github.com/lordrock/stage3-backend
 
 ## Install dependencies:
 
@@ -56,7 +56,7 @@ GET /api/profiles
 
 ## Deployment - Base URL:
 
-https://stage3-backend.onrender.com
+https://stage3-backendnew.onrender.com/
 
 ## Author
 
