@@ -4,12 +4,12 @@ const { v7: uuidv7 } = require("uuid");
 
 const RefreshToken = require("../models/RefreshToken");
 
-const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || "3m";
-const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || "5m";
+const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || "30m";
+const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || "2h";
 
 const getRefreshTokenExpiryDate = () => {
   const expiresAt = new Date();
-  expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+  expiresAt.setHours(expiresAt.getHours() + 2);
   return expiresAt;
 };
 
