@@ -21,21 +21,26 @@ const {
 
 const pkceStore = new Map();
 
-const generateCodeVerifier = () => crypto.randomBytes(32).toString("base64url");
+/* ===========================
+   PKCE HELPERS
+=========================== */
 
-const generateCodeChallenge = (codeVerifier) => {
-  return crypto.createHash("sha256").update(codeVerifier).digest("base64url");
-};
+const generateCodeVerifier = () =>
+  crypto.randomBytes(32).toString("base64url");
+
+const generateCodeChallenge = (verifier) =>
+  crypto.createHash("sha256").update(verifier).digest("base64url");
+
+/* ===========================
+   GITHUB LOGIN (WEB)
+=========================== */
 
 const startGitHubLogin = (req, res) => {
   const state = crypto.randomBytes(24).toString("hex");
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
 
-  pkceStore.set(state, {
-    codeVerifier,
-    createdAt: Date.now()
-  });
+  pkceStore.set(state, { codeVerifier });
 
   const authUrl = buildGitHubAuthUrl({
     state,
@@ -45,19 +50,25 @@ const startGitHubLogin = (req, res) => {
   return res.redirect(authUrl);
 };
 
-const upsertGithubUser = async (githubAccessToken) => {
-  const githubUser = await fetchGitHubUser(githubAccessToken);
-  const githubEmail =
-    githubUser.email || (await fetchGitHubPrimaryEmail(githubAccessToken));
+/* ===========================
+   UPSERT USER
+=========================== */
 
-  let user = await User.findOne({ github_id: String(githubUser.id) });
+const upsertGithubUser = async (token) => {
+  const githubUser = await fetchGitHubUser(token);
+  const email =
+    githubUser.email || (await fetchGitHubPrimaryEmail(token));
+
+  let user = await User.findOne({
+    github_id: String(githubUser.id)
+  });
 
   if (!user) {
     user = await User.create({
       id: uuidv7(),
       github_id: String(githubUser.id),
       username: githubUser.login,
-      email: githubEmail,
+      email,
       avatar_url: githubUser.avatar_url,
       role: "analyst",
       is_active: true,
@@ -65,7 +76,7 @@ const upsertGithubUser = async (githubAccessToken) => {
     });
   } else {
     user.username = githubUser.login;
-    user.email = githubEmail;
+    user.email = email;
     user.avatar_url = githubUser.avatar_url;
     user.last_login_at = new Date();
     await user.save();
@@ -74,6 +85,10 @@ const upsertGithubUser = async (githubAccessToken) => {
   return user;
 };
 
+/* ===========================
+   GITHUB CALLBACK (WEB)
+=========================== */
+
 const handleGitHubCallback = async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -81,42 +96,37 @@ const handleGitHubCallback = async (req, res) => {
     if (!code || !state) {
       return res.status(400).json({
         status: "error",
-        message: "Missing OAuth callback parameters"
+        message: "Missing OAuth params"
       });
     }
 
-    const pkceData = pkceStore.get(state);
+    const pkce = pkceStore.get(state);
 
-    if (!pkceData) {
+    if (!pkce) {
       return res.status(400).json({
         status: "error",
-        message: "Invalid OAuth state"
+        message: "Invalid state"
       });
     }
 
     pkceStore.delete(state);
 
-    const githubAccessToken = await exchangeCodeForGitHubToken({
+    const token = await exchangeCodeForGitHubToken({
       code,
-      codeVerifier: pkceData.codeVerifier
+      codeVerifier: pkce.codeVerifier
     });
 
-    const user = await upsertGithubUser(githubAccessToken);
-
-    if (!user.is_active) {
-      return res.status(403).json({
-        status: "error",
-        message: "User account is inactive"
-      });
-    }
+    const user = await upsertGithubUser(token);
 
     const tokens = await issueTokenPair(user);
 
     setAuthCookies(res, tokens);
 
-    return res.redirect(`${process.env.WEB_CLIENT_URL}/auth/success`);
-  } catch (error) {
-    console.error("GitHub callback error:", error.message);
+    return res.redirect(
+      `${process.env.WEB_CLIENT_URL}/auth/success`
+    );
+  } catch (err) {
+    console.error("OAuth error:", err.message);
 
     return res.status(500).json({
       status: "error",
@@ -124,6 +134,10 @@ const handleGitHubCallback = async (req, res) => {
     });
   }
 };
+
+/* ===========================
+   CLI CALLBACK
+=========================== */
 
 const cliGitHubCallback = async (req, res) => {
   try {
@@ -132,42 +146,26 @@ const cliGitHubCallback = async (req, res) => {
     if (!code || !code_verifier) {
       return res.status(400).json({
         status: "error",
-        message: "Missing OAuth callback parameters"
+        message: "Missing parameters"
       });
     }
 
-    const githubAccessToken = await exchangeCodeForGitHubToken({
+    const token = await exchangeCodeForGitHubToken({
       code,
       codeVerifier: code_verifier,
-      redirectUri:
-        process.env.GITHUB_CLI_CALLBACK_URL || "http://localhost:8765/callback"
+      redirectUri: process.env.GITHUB_CLI_CALLBACK_URL
     });
 
-    const user = await upsertGithubUser(githubAccessToken);
-
-    if (!user.is_active) {
-      return res.status(403).json({
-        status: "error",
-        message: "User account is inactive"
-      });
-    }
-
+    const user = await upsertGithubUser(token);
     const tokens = await issueTokenPair(user);
 
-    return res.status(200).json({
+    return res.json({
       status: "success",
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        avatar_url: user.avatar_url,
-        role: user.role
-      },
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token
     });
-  } catch (error) {
-    console.error("CLI OAuth callback error:", error.message);
+  } catch (err) {
+    console.error("CLI OAuth error:", err.message);
 
     return res.status(500).json({
       status: "error",
@@ -176,57 +174,48 @@ const cliGitHubCallback = async (req, res) => {
   }
 };
 
+/* ===========================
+   REFRESH TOKEN
+=========================== */
+
 const refreshTokens = async (req, res) => {
   try {
-    const refresh_token = req.body?.refresh_token || req.cookies?.refresh_token;
+    const refresh =
+      req.body?.refresh_token || req.cookies?.refresh_token;
 
-    if (!refresh_token || typeof refresh_token !== "string") {
+    if (!refresh) {
       return res.status(400).json({
         status: "error",
-        message: "Missing or empty refresh token"
+        message: "Missing refresh token"
       });
     }
 
-    const decoded = verifyRefreshTokenJwt(refresh_token);
+    const decoded = verifyRefreshTokenJwt(refresh);
     const user = await User.findOne({ id: decoded.sub });
 
-    if (!user) {
-      return res.status(401).json({
-        status: "error",
-        message: "Invalid refresh token"
-      });
-    }
-
-    if (!user.is_active) {
-      return res.status(403).json({
-        status: "error",
-        message: "User account is inactive"
-      });
-    }
-
-    const refreshTokenRecord = await findValidRefreshTokenRecord(
+    const record = await findValidRefreshTokenRecord(
       user.id,
-      refresh_token
+      refresh
     );
 
-    if (!refreshTokenRecord) {
+    if (!record) {
       return res.status(401).json({
         status: "error",
         message: "Invalid refresh token"
       });
     }
 
-    await revokeRefreshTokenRecord(refreshTokenRecord);
+    await revokeRefreshTokenRecord(record);
 
     const tokens = await issueTokenPair(user);
+
     setAuthCookies(res, tokens);
 
-    return res.status(200).json({
+    return res.json({
       status: "success",
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token
+      ...tokens
     });
-  } catch (error) {
+  } catch (err) {
     return res.status(401).json({
       status: "error",
       message: "Invalid or expired refresh token"
@@ -234,112 +223,76 @@ const refreshTokens = async (req, res) => {
   }
 };
 
+/* ===========================
+   LOGOUT
+=========================== */
+
 const logout = async (req, res) => {
-  try {
-    const refresh_token = req.body?.refresh_token || req.cookies?.refresh_token;
+  clearAuthCookies(res);
 
-    if (refresh_token) {
-      const decoded = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
-
-      const refreshTokenRecord = await findValidRefreshTokenRecord(
-        decoded.sub,
-        refresh_token
-      );
-
-      if (refreshTokenRecord) {
-        await revokeRefreshTokenRecord(refreshTokenRecord);
-      }
-    }
-
-    clearAuthCookies(res);
-
-    return res.status(200).json({
-      status: "success",
-      message: "Logged out successfully"
-    });
-  } catch (error) {
-    clearAuthCookies(res);
-
-    return res.status(200).json({
-      status: "success",
-      message: "Logged out successfully"
-    });
-  }
-};
-
-const getMe = async (req, res) => {
-  return res.status(200).json({
+  return res.json({
     status: "success",
-    data: {
-      id: req.user.id,
-      username: req.user.username,
-      email: req.user.email,
-      avatar_url: req.user.avatar_url,
-      role: req.user.role
-    }
+    message: "Logged out"
   });
 };
+
+/* ===========================
+   GET CURRENT USER
+=========================== */
+
+const getMe = (req, res) => {
+  return res.json({
+    status: "success",
+    data: req.user
+  });
+};
+
+/* ===========================
+   DEV LOGIN (IMPORTANT FIX)
+=========================== */
 
 const devLogin = async (req, res) => {
-  const requestedRole = req.query.role || req.body?.role || "admin";
+  try {
+    const role = req.query.role || "admin";
 
-  if (!["admin", "analyst"].includes(requestedRole)) {
-    return res.status(400).json({
+    if (!["admin", "analyst"].includes(role)) {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid role"
+      });
+    }
+
+    let user = await User.findOne({
+      username: `dev-${role}`
+    });
+
+    if (!user) {
+      user = await User.create({
+        id: uuidv7(),
+        github_id: `dev-${role}`,
+        username: `dev-${role}`,
+        email: `${role}@test.com`,
+        role,
+        is_active: true,
+        last_login_at: new Date()
+      });
+    }
+
+    const tokens = await issueTokenPair(user);
+
+    return res.json({
+      status: "success",
+      ...tokens
+    });
+  } catch (err) {
+    console.error(err);
+
+    return res.status(500).json({
       status: "error",
-      message: "Invalid role"
+      message: "Dev login failed"
     });
   }
-
-  let user = await User.findOne({ username: `dev-${requestedRole}` });
-
-  if (!user) {
-    user = await User.create({
-      id: uuidv7(),
-      github_id: `dev-${requestedRole}-github-id`,
-      username: `dev-${requestedRole}`,
-      email: `${requestedRole}@example.com`,
-      avatar_url: null,
-      role: requestedRole,
-      is_active: true,
-      last_login_at: new Date()
-    });
-  } else {
-    user.role = requestedRole;
-    user.is_active = true;
-    user.last_login_at = new Date();
-    await user.save();
-  }
-
-  const tokens = await issueTokenPair(user);
-
-  return res.status(200).json({
-    status: "success",
-    user: {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      avatar_url: user.avatar_url,
-      role: user.role
-    },
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token
-  });
 };
-
-  const tokens = await issueTokenPair(user);
-
-  return res.status(200).json({
-    status: "success",
-    user: {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      avatar_url: user.avatar_url,
-      role: user.role
-    },
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token
-  });
 
 module.exports = {
   startGitHubLogin,
