@@ -281,26 +281,33 @@ const getMe = async (req, res) => {
 };
 
 const devLogin = async (req, res) => {
-  if (process.env.NODE_ENV === "production") {
-    return res.status(404).json({
+  const requestedRole = req.query.role || req.body?.role || "admin";
+
+  if (!["admin", "analyst"].includes(requestedRole)) {
+    return res.status(400).json({
       status: "error",
-      message: "Route not found"
+      message: "Invalid role"
     });
   }
 
-  let user = await User.findOne({ username: "dev-admin" });
+  let user = await User.findOne({ username: `dev-${requestedRole}` });
 
   if (!user) {
     user = await User.create({
       id: uuidv7(),
-      github_id: "dev-admin-github-id",
-      username: "dev-admin",
-      email: "dev-admin@example.com",
+      github_id: `dev-${requestedRole}-github-id`,
+      username: `dev-${requestedRole}`,
+      email: `${requestedRole}@example.com`,
       avatar_url: null,
-      role: "admin",
+      role: requestedRole,
       is_active: true,
       last_login_at: new Date()
     });
+  } else {
+    user.role = requestedRole;
+    user.is_active = true;
+    user.last_login_at = new Date();
+    await user.save();
   }
 
   const tokens = await issueTokenPair(user);
@@ -311,12 +318,28 @@ const devLogin = async (req, res) => {
       id: user.id,
       username: user.username,
       email: user.email,
+      avatar_url: user.avatar_url,
       role: user.role
     },
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token
   });
 };
+
+  const tokens = await issueTokenPair(user);
+
+  return res.status(200).json({
+    status: "success",
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      avatar_url: user.avatar_url,
+      role: user.role
+    },
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token
+  });
 
 module.exports = {
   startGitHubLogin,
