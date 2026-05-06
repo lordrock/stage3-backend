@@ -13,6 +13,9 @@ const {
 const validateProfileQuery = require("../utils/validateQuery");
 const parseNaturalLanguageQuery = require("../utils/nlQueryParser");
 
+const { getCache, setCache, deleteCacheByPrefix } = require("../utils/cache");
+const { createCacheKey } = require("../utils/normalizeQuery");
+
 const getAgeGroup = (age) => {
   if (age >= 0 && age <= 12) return "child";
   if (age >= 13 && age <= 19) return "teenager";
@@ -70,16 +73,34 @@ const getProfiles = async (req, res) => {
 
     const { page, limit, skip } = getPagination(req.query.page, req.query.limit);
 
+    const cacheKey = createCacheKey({
+      prefix: "profiles:list",
+      filters,
+      sort: sortOptions,
+      page,
+      limit
+    });
+
+    const cached = getCache(cacheKey);
+
+    if (cached) {
+      return res.status(200).json({
+        ...cached,
+        cache: "hit"
+      });
+    }
+
     const total = await Profile.countDocuments(filters);
 
     const profiles = await Profile.find(filters)
       .sort(sortOptions)
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean();
 
     const pagination = buildPaginationLinks(req, page, limit, total);
 
-    return res.status(200).json({
+    const responseBody = {
       status: "success",
       page,
       limit,
@@ -87,6 +108,13 @@ const getProfiles = async (req, res) => {
       total_pages: pagination.total_pages,
       links: pagination.links,
       data: profiles.map(formatProfile)
+    };
+
+    setCache(cacheKey, responseBody);
+
+    return res.status(200).json({
+      ...responseBody,
+      cache: "miss"
     });
   } catch (error) {
     console.error("GET profiles error:", error.message);
@@ -120,11 +148,28 @@ const searchProfiles = async (req, res) => {
 
     const paginationData = getPagination(page, limit);
 
+    const cacheKey = createCacheKey({
+      prefix: "profiles:search",
+      filters,
+      page: paginationData.page,
+      limit: paginationData.limit
+    });
+
+    const cached = getCache(cacheKey);
+
+    if (cached) {
+      return res.status(200).json({
+        ...cached,
+        cache: "hit"
+      });
+    }
+
     const total = await Profile.countDocuments(filters);
 
     const profiles = await Profile.find(filters)
       .skip(paginationData.skip)
-      .limit(paginationData.limit);
+      .limit(paginationData.limit)
+      .lean();
 
     const pagination = buildPaginationLinks(
       req,
@@ -133,7 +178,7 @@ const searchProfiles = async (req, res) => {
       total
     );
 
-    return res.status(200).json({
+    const responseBody = {
       status: "success",
       page: paginationData.page,
       limit: paginationData.limit,
@@ -141,6 +186,13 @@ const searchProfiles = async (req, res) => {
       total_pages: pagination.total_pages,
       links: pagination.links,
       data: profiles.map(formatProfile)
+    };
+
+    setCache(cacheKey, responseBody);
+
+    return res.status(200).json({
+      ...responseBody,
+      cache: "miss"
     });
   } catch (error) {
     console.error("Search profiles error:", error.message);
@@ -156,7 +208,7 @@ const getProfileById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const profile = await Profile.findOne({ id });
+    const profile = await Profile.findOne({ id }).lean();
 
     if (!profile) {
       return res.status(404).json({
@@ -192,7 +244,7 @@ const createProfile = async (req, res) => {
 
     const normalizedName = name.trim();
 
-    const existingProfile = await Profile.findOne({ name: normalizedName });
+    const existingProfile = await Profile.findOne({ name: normalizedName }).lean();
 
     if (existingProfile) {
       return res.status(200).json({
@@ -280,6 +332,8 @@ const createProfile = async (req, res) => {
       created_at: new Date()
     });
 
+    deleteCacheByPrefix("profiles:");
+
     return res.status(201).json({
       status: "success",
       data: formatProfile(newProfile)
@@ -324,7 +378,7 @@ const exportProfiles = async (req, res) => {
       });
     }
 
-    const profiles = await Profile.find(filters).sort(sortOptions);
+    const profiles = await Profile.find(filters).sort(sortOptions).lean();
 
     const rows = profiles.map((profile) => ({
       id: profile.id,
@@ -388,6 +442,8 @@ const deleteProfile = async (req, res) => {
     }
 
     await Profile.deleteOne({ id });
+
+    deleteCacheByPrefix("profiles:");
 
     return res.status(204).send();
   } catch (error) {

@@ -8,6 +8,7 @@ const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
 const profileRoutes = require("./routes/profileRoutes");
 const userRoutes = require("./routes/userRoutes");
+const ingestionRoutes = require("./routes/ingestionRoutes");
 const requestLogger = require("./middleware/requestLogger");
 const { authRateLimiter } = require("./middleware/rateLimitMiddleware");
 
@@ -27,7 +28,6 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true
@@ -46,6 +46,7 @@ app.get("/", (req, res) => {
 app.use("/auth", authRateLimiter, authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/profiles", profileRoutes);
+app.use("/api/ingest", ingestionRoutes);
 
 app.use((req, res) => {
   return res.status(404).json({
