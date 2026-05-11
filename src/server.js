@@ -11,6 +11,8 @@ const userRoutes = require("./routes/userRoutes");
 const ingestionRoutes = require("./routes/ingestionRoutes");
 const requestLogger = require("./middleware/requestLogger");
 const { authRateLimiter } = require("./middleware/rateLimitMiddleware");
+const queryRoutes = require("./routes/queryRoutes");
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +23,7 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 app.use(helmet());
+app.use("/api/queries", queryRoutes);
 
 app.use(
   cors({
